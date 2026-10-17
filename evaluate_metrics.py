@@ -103,7 +103,83 @@ def calculate_costs(provider, total_latency, total_tx_processed, monthly_volume=
     
     return {
         "cost_per_llm_tx": f"${cost_per_tx:.5f}",
-        "projected_monthly_cost": f"${monthly_cost:.2f} (processing {int(tx_to_llm_monthly)} txs with LLM)"
+        "projected_monthly_cost": f"${monthly_cost:.2f} (processing {int(tx_to_llm_monthly)} txs with LLM)",
+        # Raw numbers alongside the display strings, so callers that need to chart
+        # or compare costs do not have to parse the formatted text back out.
+        "cost_per_llm_tx_usd": cost_per_tx,
+        "projected_monthly_cost_usd": monthly_cost,
+    }
+
+
+def compute_metrics(provider_name, results_path, truth_path, tx_path):
+    """
+    Scores one provider and returns every metric as data instead of printing it.
+
+    This is the single source of truth for the evaluation: both the CLI report
+    and the Streamlit dashboard consume it, so the two can never drift apart.
+
+    Args:
+        provider_name: Provider key used for pricing and display.
+        results_path: CSV with that provider's LLM verdicts.
+        truth_path: CSV with the ground-truth labels.
+        tx_path: CSV with the full transaction universe.
+
+    Returns:
+        Dict with the scored DataFrame, classification report (dict and text),
+        confusion matrix, latency summary, and cost projection. `report`,
+        `report_text` and `confusion_matrix` are None if sklearn could not
+        compute them.
+
+    Raises:
+        FileNotFoundError, KeyError, ValueError: Propagated from load_and_prepare_data.
+    """
+    df = load_and_prepare_data(results_path, truth_path, tx_path)
+
+    report, report_text, matrix = None, None, None
+    try:
+        # target_names: 0 = Normal, 1 = Fraud
+        report_args = {
+            'labels': [0, 1],
+            'target_names': ['Normal', 'Fraud'],
+            'zero_division': 0,
+        }
+        report = classification_report(
+            df['true_label'], df['predicted_label'], output_dict=True, **report_args
+        )
+        report_text = classification_report(
+            df['true_label'], df['predicted_label'], **report_args
+        )
+    except ValueError as e:
+        report_error = str(e)
+    else:
+        report_error = None
+
+    try:
+        # labels=[0, 1] forces a 2x2 matrix even if one class is absent from the data,
+        # which would otherwise collapse the shape and raise an IndexError downstream.
+        matrix = confusion_matrix(df['true_label'], df['predicted_label'], labels=[0, 1])
+    except ValueError as e:
+        matrix_error = str(e)
+    else:
+        matrix_error = None
+
+    # Only transactions that actually reached the LLM have a latency; the ones the
+    # heuristic filtered out are NaN and must not drag the average toward zero.
+    reviewed = df['latency_sec'].dropna()
+
+    return {
+        'provider': provider_name,
+        'data': df,
+        'report': report,
+        'report_text': report_text,
+        'report_error': report_error,
+        'confusion_matrix': matrix,
+        'matrix_error': matrix_error,
+        'avg_latency_sec': float(reviewed.mean()) if not reviewed.empty else None,
+        'reviewed_count': int(reviewed.count()),
+        'total_transactions': int(len(df)),
+        'alert_count': int((df['predicted_label'] == 1).sum()),
+        'costs': calculate_costs(provider_name, reviewed.sum(), int((df['predicted_label'] == 1).sum())),
     }
 
 def evaluate_model(provider_name, results_path, truth_path, tx_path):
@@ -124,42 +200,38 @@ def evaluate_model(provider_name, results_path, truth_path, tx_path):
     print(f"EVALUATING MODEL: {provider_name.upper()}")
     print(f"{'='*40}")
     
-    df = load_and_prepare_data(results_path, truth_path, tx_path)
+    metrics = compute_metrics(provider_name, results_path, truth_path, tx_path)
     
     # Metrics
     print("\n1. Classification Report (Precision, Recall, F1):")
-    # target_names: 0 = Normal, 1 = Fraud
-    try:
-        print(classification_report(
-            df['true_label'], df['predicted_label'],
-            labels=[0, 1], target_names=['Normal', 'Fraud'], zero_division=0
-        ))
-    except ValueError as e:
-        print(f"Could not compute the classification report: {e}")
+    if metrics['report_text'] is None:
+        print(f"Could not compute the classification report: {metrics['report_error']}")
+    else:
+        print(metrics['report_text'])
     
     print("\n2. Confusion Matrix:")
-    try:
-        # labels=[0, 1] forces a 2x2 matrix even if one class is absent from the data,
-        # which would otherwise collapse the shape and raise an IndexError below.
-        cm = confusion_matrix(df['true_label'], df['predicted_label'], labels=[0, 1])
+    cm = metrics['confusion_matrix']
+    if cm is None:
+        print(f"Could not compute the confusion matrix: {metrics['matrix_error']}")
+    else:
         print(f"True Negatives (Normal -> Normal): {cm[0][0]}")
         print(f"False Positives (Normal -> Fraud): {cm[0][1]} <- False alarms")
         print(f"False Negatives (Fraud -> Normal): {cm[1][0]} <- Fraud we missed")
         print(f"True Positives (Fraud -> Fraud): {cm[1][1]} <- Fraud caught")
-    except ValueError as e:
-        print(f"Could not compute the confusion matrix: {e}")
     
     # Latency and Costs
     print(f"\n3. Performance and Cost (50k tx/month projection):")
-    reviewed = df['latency_sec'].dropna()
-    if reviewed.empty:
+    if metrics['avg_latency_sec'] is None:
         print("No transactions reached the LLM, so there is no latency to report.")
     else:
-        print(f"Average latency per transaction sent to LLM: {reviewed.mean():.2f} seconds")
-    costs = calculate_costs(provider_name, reviewed.sum(), len(df[df['predicted_label'] == 1]))
-    print(json.dumps(costs, indent=2))
+        print(f"Average latency per transaction sent to LLM: {metrics['avg_latency_sec']:.2f} seconds")
+    costs = metrics['costs']
+    print(json.dumps({
+        'cost_per_llm_tx': costs['cost_per_llm_tx'],
+        'projected_monthly_cost': costs['projected_monthly_cost'],
+    }, indent=2))
     
-    return df
+    return metrics['data']
 
 if __name__ == "__main__":
     truth_file = "datasets/ground_truth_labels.csv"
