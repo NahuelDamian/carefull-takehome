@@ -236,9 +236,27 @@ def evaluate_model(provider_name, results_path, truth_path, tx_path):
 if __name__ == "__main__":
     truth_file = "datasets/ground_truth_labels.csv"
     tx_file = "datasets/transactions.csv"
-    
-    # Evaluate OpenRouter (GPT-4o-mini)
-    df_or = evaluate_model("openrouter", "results/results_openrouter.csv", truth_file, tx_file)
-    
-    # Evaluate Groq (gpt-oss-20b)
-    df_groq = evaluate_model("groq", "results/results_groq.csv", truth_file, tx_file)
+
+    providers = [
+        ("openrouter", "results/results_openrouter.csv"),  # GPT-4o-mini
+        ("groq", "results/results_groq.csv"),              # gpt-oss-20b
+    ]
+
+    # load_and_prepare_data raises precise, actionable errors; catching them here turns
+    # them into a readable message instead of a traceback, and keeps one missing or
+    # malformed provider file from aborting the evaluation of the others.
+    failures = 0
+    for provider_name, results_path in providers:
+        try:
+            evaluate_model(provider_name, results_path, truth_file, tx_file)
+        except FileNotFoundError as e:
+            failures += 1
+            print(f"\nSkipping {provider_name}: {e}")
+            print("Run `python llm_validator.py` first to generate the results files.")
+        except (KeyError, ValueError) as e:
+            failures += 1
+            print(f"\nSkipping {provider_name}: {results_path} is malformed. {e}")
+
+    if failures == len(providers):
+        # Non-zero exit so CI or a shell script can tell that nothing was scored.
+        raise SystemExit("No providers could be evaluated.")
