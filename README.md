@@ -2,10 +2,13 @@
 
 An LLM-powered pipeline designed to detect and validate suspicious financial activity (exploitation, money mules, and out-of-profile spending) for older adults.
 
+**🔗 Live Demo: [carefull-takehome.streamlit.app](https://carefull-takehome.streamlit.app)** — compare both models side by side and browse the LLM verdicts and reasoning for every flagged transaction, no setup or API keys required.
+
 ## Architecture
 The system uses a two-stage approach to balance accuracy, latency, and cost:
 1. **Heuristic Filter (`heuristics.py`)**: Uses Pandas to process raw transactions, normalize recipient entities, and flag mathematical anomalies (escalating transfers, rapid in/out flows, 3-sigma spending deviations).
 2. **LLM Validator (`llm_validator.py`)**: Analyzes flagged transactions alongside the user's biographical profile using LangChain to determine true risk, effectively filtering out false positives.
+3. **Results Dashboard (`app.py`)**: A Streamlit front-end that reads the committed `results/` artifacts and renders, for every provider: the evaluation metrics (precision, recall, F1, confusion matrix, latency, projected cost) side by side, plus the full per-transaction verdicts with the model's reasoning. Scoring is delegated to `evaluate_metrics.compute_metrics`, so the dashboard and the CLI report cannot drift apart.
 
 ### How the LLM Is Integrated into the Pipeline
 
@@ -177,6 +180,10 @@ Average latency per transaction sent to LLM: 2.55 seconds
       ```bash
       python evaluate_metrics.py
       ```
+   4. *(Optional)* Launch the results dashboard locally — the same view published at [carefull-takehome.streamlit.app](https://carefull-takehome.streamlit.app). Requires no API keys, since it only reads the CSVs in `results/`:
+      ```bash
+      streamlit run app.py
+      ```
 
 ## Evaluation Metrics Significance
 
@@ -205,4 +212,6 @@ The confusion matrix is the operational view. For the 291-transaction sample:
 
 ### A Note on Deployment
 
-This is intentionally a reproducible batch pipeline rather than a hosted service: it is deterministic given the same inputs, runs end-to-end in three commands, and writes every intermediate artifact to disk for inspection. There is no live demo to inspect — the `results/` directory is committed so the outputs can be reviewed without needing API keys, and re-running the pipeline reproduces them.
+The pipeline itself is intentionally a reproducible batch job rather than a live service: it is deterministic given the same inputs, runs end-to-end in three commands, and writes every intermediate artifact to disk for inspection.
+
+The **[hosted dashboard](https://carefull-takehome.streamlit.app)** sits on top of those artifacts. It reads the committed `results/` CSVs, so reviewers can compare both models' metrics and inspect their verdicts and reasoning without cloning the repo or supplying API keys. Re-running the pipeline locally regenerates exactly what the dashboard displays.
