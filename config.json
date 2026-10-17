@@ -1,0 +1,11 @@
+{
+  "min_transfers_for_trend": 3,
+  "escalation_slope_usd": 50,
+  "mule_min_inflow_usd": 2000,
+  "mule_max_hours": 48,
+  "mule_outflow_ratio": 0.8,
+  "out_of_profile_sigmas": 3,
+  "out_of_profile_min_usd": 100,
+  "high_risk_keywords": ["IBIZA", "BANGKOK", "DUBAI", "CLUB"],
+  "transfer_keywords": ["ZELLE", "WIRE"]
+}
